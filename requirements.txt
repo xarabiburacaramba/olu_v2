@@ -1,0 +1,9 @@
+psycopg2
+requests
+osgeo
+numpy
+scipy
+pandas
+pillow
+networkx
+lxml
