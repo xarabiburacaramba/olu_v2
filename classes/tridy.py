@@ -15,7 +15,19 @@ from lxml import etree
 from shutil import copyfile
 import datetime
 from io import BytesIO
+import binascii
 
+def transform_wkt_geometry(geom_wkt, osr_coordinatetransformation):
+    geom=ogr.CreateGeometryFromWkt(geom_wkt)
+    geom.Transform(osr_coordinatetransformation)
+    return geom.ExportToWkt()
+
+
+def transform_name_to_postgresql_format(name):
+    if name[0].isdigit():
+        return '"{}"'.format(name)
+    else:
+        return name
 
 def precision_and_scale(x):
  max_digits = 14
@@ -128,10 +140,10 @@ def image_to_array(i):
 def unzip_file(file, member, folder):
     if member=='all':
         zipfile.ZipFile(file).extractall(folder)
-        return(zipfile.ZipFile(file).namelist())
+        return([(folder+i) for i in zipfile.ZipFile(file).namelist()])
     else:
         zipfile.ZipFile(file).extract(member, folder)
-        return(member)
+        return(folder+member)
 
 def recursive_dict(element):
     if element.text == None and len(element.attrib):
@@ -288,7 +300,7 @@ class GeoConcept():
             name=self._name.replace(' ','_').lower()
         self._table=Table(name, self._attributes, dbstorage_object, scheme, adm_graph_node=adm_graph_node)
         if conflict=='replace':
-            dbstorage_object.execute('DROP TABLE IF EXISTS %s.%s CASCADE' % (scheme,name )) 
+            dbstorage_object.execute('DROP TABLE IF EXISTS %s CASCADE' % ( transform_name_to_postgresql_format(scheme)+'.'+ transform_name_to_postgresql_format(name) )) 
             dbstorage_object.execute(self._table.create_script())
         else:
             if  dbstorage_object.execute("SELECT EXISTS ( SELECT FROM information_schema.tables WHERE  table_schema = '%s' AND table_name = '%s')" % (scheme,name) )[0][0] == True:
@@ -494,7 +506,7 @@ class SubGeoConcept(GeoConcept):
             name=self._name.replace(' ','_').lower()
         self._table=Table(name, self._attributes, dbstorage_object, scheme, adm_graph_node, table_inheritance=(None if self._table_inheritance==False else self._supergeoconcept.get_table().get_name() ))
         if conflict=='replace':
-            dbstorage_object.execute('DROP TABLE IF EXISTS %s.%s CASCADE' % (scheme,name )) 
+            dbstorage_object.execute('DROP TABLE IF EXISTS %s CASCADE' % ( transform_name_to_postgresql_format(scheme)+'.'+ transform_name_to_postgresql_format(name) )) 
             dbstorage_object.execute(self._table.create_script())
         else:
             if  dbstorage_object.execute("SELECT EXISTS ( SELECT FROM information_schema.tables WHERE  table_schema = '%s' AND table_name = '%s')" % (scheme, name) )[0][0] == True:
@@ -713,7 +725,7 @@ class DBStorage():
                 cursor.close()
         except:
                 cursor.close()
-                results='all fail'
+                results='query executed'
         return results
     def execute_many(self, query, number=1):
         cursor=self._connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -724,7 +736,7 @@ class DBStorage():
                 results=cursor.fetchmany(number)
                 yield results
         except:
-            results='all fail'
+            results='query executed'
             return results
         cursor.close()
 
@@ -791,31 +803,31 @@ class Table():
        self._adm_graph_node=adm_graph_node
     def create_script(self):
         if self._table_inheritance==None:
-            return  'create table %s.%s (%s) '  %  (self._scheme, self._name, ','.join([str(i[0])+' '+str(i[1]) for i in [[v for k,v  in i.items()] for i in self._data_structure]]))
+            return  'create table %s.%s (%s) '  %  (transform_name_to_postgresql_format(self._scheme), transform_name_to_postgresql_format(self._name), ','.join([str(i[0])+' '+str(i[1]) for i in [[v for k,v  in i.items()] for i in self._data_structure]]))
         else:
-            return 'create table %s.%s () inherits (%s) '  %  (self._scheme, self._name, self._table_inheritance)
+            return 'create table %s.%s () inherits (%s) '  %  (transform_name_to_postgresql_format(self._scheme), transform_name_to_postgresql_format(self._name), self._table_inheritance)
     def define_inheritance(self,  inheritance_dictionary):
         self._dbs.execute('create_inheritance')
     def read_feature(self):
         '''read first single feature '''
-        feature=self._dbs.execute('select * from %s limit 1' % (self._scheme+'.'+self._name) )
+        feature=self._dbs.execute('select * from %s limit 1' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name) ))
         return feature
     def read_features(self, number=1000):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s' % (self._scheme+'.'+self._name) ,  number=number)
+        features=self._dbs.execute_many('select * from %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
         return features
     def read_features_by_condition(self, condition, number=1000):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s where %s' % (self._scheme+'.'+self._name, condition) ,  number=number)
+        features=self._dbs.execute_many('select * from %s where %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name), condition) ,  number=number)
         return features
     def create_index(self, column,  type,  unique=False):
         if type=='btree':
             if unique==True:
-                self._dbs.execute('create unique index uidx_%s_%s ON %s (%s);' % ( self._name,  column,  (self._scheme+'.'+self._name), column ) )
+                self._dbs.execute('create unique index uidx_%s_%s ON %s (%s);' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
             else:
-                self._dbs.execute('create index idx_%s_%s on %s using btree(%s)' % ( self._name,  column,  (self._scheme+'.'+self._name), column ) )
+                self._dbs.execute('create index idx_%s_%s on %s using btree(%s)' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
         elif type=='gist':
-            self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  column,  (self._scheme+'.'+self._name), column ) )
+            self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
         else:
             print('this type of index is not implemented')
             
@@ -841,25 +853,25 @@ class View(Table):
        raise AttributeError( "'View' object has no 'inheritance'" )
     def read_feature(self):
         '''read first single feature '''
-        feature=self._dbs.execute('select * from %s limit 1' % (self._scheme+'.'+self._name) )
+        feature=self._dbs.execute('select * from %s limit 1' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) )
         return feature
     def read_features(self, number=1000):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s' % (self._scheme+'.'+self._name) ,  number=number)
+        features=self._dbs.execute_many('select * from %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
         return features
     def read_features_by_condition(self, condition, number=1000):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s where %s' % (self._scheme+'.'+self._name, condition) ,  number=number)
+        features=self._dbs.execute_many('select * from %s where %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
         return features
     def create_index(self, column,  type,  unique=False):
         if self._type=='materialized':
             if type=='btree':
                 if unique==True:
-                    self._dbs.execute('create unique index uidx_%s_%s ON %s (%s);' % ( self._name,  column,  (self._scheme+'.'+self._name), column ) )
+                    self._dbs.execute('create unique index uidx_%s_%s ON %s (%s);' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
                 else:
-                    self._dbs.execute('create index idx_%s_%s on %s using btree(%s)' % ( self._name,  column,  (self._scheme+'.'+self._name), column ) )
+                    self._dbs.execute('create index idx_%s_%s on %s using btree(%s)' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
             elif type=='gist':
-                self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  column,  (self._scheme+'.'+self._name), column ) )
+                self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
             else:
                 print('this type of index is not implemented')
         else:
@@ -875,6 +887,24 @@ class Feature():
         return self._data
     def get_geometry(self):
         return self._geom
+    def transform_geometry(self, osr_coordinatetransformation):
+        if self._geom_type=='wkt':
+            geom=ogr.CreateGeometryFromWkt(self._geom)
+            geom.Transform(osr_coordinatetransformation)
+            self._geom=geom.ExportToWkt()
+            self._geom_type='wkt'
+        elif self._geom_type=='geojson':
+            geom=ogr.CreateGeometryFromJson(self._geom)
+            geom.Transform(osr_coordinatetransformation)
+            self._geom=geom.ExportToWkt()
+            self._geom_type='wkt'
+        elif self._geom_type=='wkb':
+            geom=ogr.CreateGeometryFromWkb(binascii.unhexlify(self._geom))
+            geom.Transform(osr_coordinatetransformation)
+            self._geom=geom.ExportToWkt()
+            self._geom_type='wkt'
+        else:
+            raise ValueError('the feature has unsupported geometry type')
     def get_geometry_type(self):
         return self._geom_type
     def convert_to_sql_insert(self):
@@ -891,7 +921,7 @@ class Feature():
         elif self._geom_type=='geojson':
             geom_json=self._geom
         elif self._geom_type=='wkb':
-            geom=ogr.CreateGeometryFromWkb(self._geom)
+            geom=ogr.CreateGeometryFromWkb(binascii.unhexlify(self._geom))
             geom_json=json.loads(geom.ExportToJson())
         else:
             raise ValueError('the feature has unsupported geometry type')
@@ -924,7 +954,7 @@ class AdmUnitFeature(Feature):
         elif self._geom_type=='geojson':
             geom_json=self._geom
         elif self._geom_type=='wkb':
-            geom=ogr.CreateGeometryFromWkb(self._geom)
+            geom=ogr.CreateGeometryFromWkb(binascii.unhexlify(self._geom))
             geom_json=json.loads(geom.ExportToJson())
         else:
             raise ValueError('the feature has unsupported geometry type')
@@ -932,7 +962,7 @@ class AdmUnitFeature(Feature):
         return {"type": "Feature", "geometry":geom_json, "properties":data}
     
 class FeatureWithID(Feature):
-    "vektorovy prvek, reprezentuje administrativne uzemni celek"
+    "vektorovy prvek, reprezentuje prvek s urcitym IDckem"
     def __init__(self, data, geom, id,  geom_type='wkt'):
         super().__init__(data, geom,  geom_type)
         self._id=id
@@ -945,8 +975,26 @@ class FeatureWithID(Feature):
             return '((\''+self._geom+'\')::geometry,\''+json.dumps(self._data).replace("'","''")+'\'::json,'+str(self._id)+ ')'
         elif self._geom_type=='geojson':
             return '(st_geomfromgeojson(\''+json.dumps(self._geom)+'\'),\''+json.dumps(self._data).replace("'","''")+'\'::json,'+str(self._id)+')'
+            
+            
+class FeatureWithRasterMap(FeatureWithID):
+    "vektorovy prvek, reprezentuje prvek, jednim jehoz atributem je rastrova mapa"
+    def __init__(self, data, geom, id,  raster_map,  geom_type='wkt'):
+        super().__init__(data, geom, id,  geom_type)
+        self._raster_map=raster_map
+    def get_raster_map(self):
+        return self._raster_map
+    def set_raster_map(self, raster_map):
+        self._raster_map=raster_map
+    def convert_to_sql_insert(self):
+        if self._geom_type=='wkt':
+            return '(st_geomfromtext(\''+self._geom+'\'),\''+json.dumps(self._data).replace("'","''")+'\'::json,'+str(self._id)+ ')'
+        elif self._geom_type=='wkb':
+            return '((\''+self._geom+'\')::geometry,\''+json.dumps(self._data).replace("'","''")+'\'::json,'+str(self._id)+ ')'
+        elif self._geom_type=='geojson':
+            return '(st_geomfromgeojson(\''+json.dumps(self._geom)+'\'),\''+json.dumps(self._data).replace("'","''")+'\'::json,'+str(self._id)+')'
     
-    
+#prvek neni treba, zrusit!
 class OLUFeature(FeatureWithID):
     '''vektorovy prvek, dosazeny transformaci z obycejneho vektoroveho prvku. je vytvaren dle modelu OLU.  '''
     def __init__(self, transformation_dictionary,  geom_type='wkt'):
@@ -1004,7 +1052,7 @@ class Grid:
  Then stepsize which is a tuple of x and y stepsize.
  And griddata which is data matrix which needs to be fit into the grid.
  '''
- def __init__ (self, grid_origin, grid_stepsize, grid_size=None, grid_data=None):
+ def __init__ (self, grid_origin, grid_stepsize, grid_size=None, grid_data=None, grid_cell_origin='ul'):
   '''
   Initialization of the grid object that takes in the described 3 parameters.
   '''
@@ -1012,6 +1060,7 @@ class Grid:
   self._grid_stepsize = grid_stepsize
   self._grid_size=grid_size
   self._grid_data=grid_data
+  self._grid_cellorigin=grid_cell_origin
   
  def get_gridorigin(self):
   '''
@@ -1105,11 +1154,15 @@ class Grid:
   Finds index of the point coordinate if it is within the grid.
   Otherwise returns error.
   '''
-  xOffset = math.floor(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0])
-  # if coordinate[0] >=0 else math.floor((360+coordinate[0] - self._grid_origin[0])/self._grid_stepsize[0])
-  #mozna pridat podminku ohledne y kroku, zda je kladny anebo zaporny
-  #yOffset = math.ceil(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1])
-  yOffset = math.floor(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1])
+  if self._grid_cellorigin=='ul':
+      xOffset = math.floor(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0])
+      yOffset = math.floor(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1])
+  elif self._grid_cellorigin=='cc':
+      xOffset = round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]).astype(int)
+      yOffset = round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]).astype(int)
+  else:
+      xOffset = round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]).astype(int)
+      yOffset = round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]).astype(int)
   return(xOffset,yOffset)
   
  '''def split_grid(self, size, origin=self._grid_origin, folder_scheme=None):
@@ -1130,26 +1183,30 @@ class Imagee():
         It is needed to provide numpy array (values in 2D space) as well as metadata,
         where 'affine_transformation' and 'nodata' keys are important.
         '''
-        self._metadata = metadata
-        if type(dataarray)==ma.core.MaskedArray:
-            dataarray = dataarray.filled(self._metadata['nodata'])
-            self._data = ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
-        elif 'nodata' in self._metadata:
-            self._data = ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
+        if metadata!=None and dataarray!=None:
+            self._metadata = metadata
+            if type(dataarray)==ma.core.MaskedArray:
+                dataarray = dataarray.filled(self._metadata['nodata'])
+                self._data = ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
+            elif 'nodata' in self._metadata:
+                self._data = ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
+            else:
+                self._data = ma.array(dataarray,mask=[dataarray==-32767])
         else:
-            self._data = ma.array(dataarray,mask=[dataarray==-32767])
+            self._metadata=metadata
+            self._data=dataarray
 
     def get_metadata(self):
-        '''
-        Returns metadata dictionary.
-        '''
         return self._metadata
+        
+    def set_metadata(self, metadata):
+        self._metadata=metadata
 
     def get_data(self):
-        '''
-        Returns 2D matrix of values.
-        '''
         return self._data  
+    
+    def set_data(self, data):
+        self._data=data
 
     def image_to_geo_coordinates(self, rownum, colnum):
         return( (self._metadata['affine_transformation'][0]+colnum*self._metadata['affine_transformation'][1]+0.5*self._metadata['affine_transformation'][1], self._metadata['affine_transformation'][3]+rownum*self._metadata['affine_transformation'][5]+0.5*self._metadata['affine_transformation'][5]) )
@@ -1267,25 +1324,25 @@ class Imagee():
         '''
         Get self min value excluding self nodata value.
         '''
-        return np.min(self._data[np.where(self._data!=self._metadata['nodata'])])
+        return np.nanmin(self._data[np.where(self._data!=self._metadata['nodata'])])
 
     def get_max_value(self):
         '''
         Get self max value excluding self nodata value.
         '''
-        return np.max(self._data[np.where(self._data!=self._metadata['nodata'])])
+        return np.nanmax(self._data[np.where(self._data!=self._metadata['nodata'])])
 
     def get_mean_value(self):
         '''
         Get self mean value excluding self nodata values.
         '''
-        return np.mean(self._data[np.where(self._data!=self._metadata['nodata'])])
+        return np.nanmean(self._data[np.where(self._data!=self._metadata['nodata'])])
 
     def get_median_value(self):
         '''
         Get self median value excluding self nodata values.
         '''
-        return np.median(self._data[np.where(self._data!=self._metadata['nodata'])])
+        return np.nanmedian(self._data[np.where(self._data!=self._metadata['nodata'])])
 
     def calculate_slope(self):
         '''
