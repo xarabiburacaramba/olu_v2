@@ -1,3 +1,4 @@
+
 import psycopg2
 import psycopg2.extras
 import requests
@@ -276,6 +277,33 @@ class GeoConcept():
     def append_subgeoconcept(self, subgeoconcept):
         self._subgeoconcepts.append(subgeoconcept)
         
+    def set_raster_output_backend(self, folder, name):
+        self._raster_backend=folder+name
+        
+    def get_raster_output_backend(self):
+        return self._raster_backend
+        
+    def read_raster_output_backend(self, band_number=1, bbox=None):
+        driver=gdal.GetDriverByName(self._data_source.get_attributes()['format'])
+        dataset = gdal.Open(self._raster_backend)
+        metadata_dict={}
+        metadata_dict['affine_transformation']=dataset.GetGeoTransform()
+        metadata_dict['nodata']=dataset.GetRasterBand(band_number).GetNoDataValue()
+        metadata_dict['proj_wkt']=dataset.GetProjectionRef()
+        grid=Grid((metadata_dict['affine_transformation'][0],metadata_dict['affine_transformation'][3]),(metadata_dict['affine_transformation'][1],metadata_dict['affine_transformation'][5]),grid_cell_origin='ul')
+        if bbox is None:
+            im=Imagee((dataset.GetRasterBand(band_number).ReadAsArray()),metadata_dict, grid)
+        else:
+            ul_offset=grid.find_index([bbox[0],bbox[1]])
+            lr_offset=grid.find_index([bbox[2],bbox[3]])
+            im_data=dataset.GetRasterBand(band_number).ReadAsArray(xoff=ul_offset[0],yoff=ul_offset[1],win_xsize=(lr_offset[0]-ul_offset[0]) if (lr_offset[0]-ul_offset[0])>0 else 1 ,win_ysize=(ul_offset[1]-lr_offset[1]) if (ul_offset[1]-lr_offset[1])>0 else 1 )
+            im_metadata={**metadata_dict, **{'affine_transformation':(grid.get_gridorigin()[0]+ul_offset[0]*grid.get_gridstepsize()[0], grid.get_gridstepsize()[0], 0.0, grid.get_gridorigin()[1]+ul_offset[1]*grid.get_gridstepsize()[1], 0.0, grid.get_gridstepsize()[1])}}
+            im_grid=Grid((im_metadata['affine_transformation'][0],im_metadata['affine_transformation'][3]),(im_metadata['affine_transformation'][1],im_metadata['affine_transformation'][5]),grid_cell_origin='ul')
+            im=Imagee(im_data, im_metadata, im_grid)
+            del(im_data, im_metadata, im_grid, ul_offset, lr_offset)
+        del(driver, dataset, grid)
+        return im
+    
     def set_geojson_output_backend(self,  folder,  name,  type='GeoJSON'):
         self._geojson_backend=folder+name
         
@@ -476,6 +504,9 @@ class GeoConcept():
             return G
         else:
             return 'just concepts with AdmUnitFeature representation could be exported to networkx graph'
+            
+    def convert_to_sql_insert(self):
+        '''function to write self representation to the relational database'''
         
 
 class SubGeoConcept(GeoConcept):
@@ -504,7 +535,7 @@ class SubGeoConcept(GeoConcept):
     def create_table(self, dbstorage_object, name='default',  scheme='public', conflict='replace', adm_graph_node=None):
         if name=='default':
             name=self._name.replace(' ','_').lower()
-        self._table=Table(name, self._attributes, dbstorage_object, scheme, adm_graph_node, table_inheritance=(None if self._table_inheritance==False else self._supergeoconcept.get_table().get_name() ))
+        self._table=Table(name, self._attributes, dbstorage_object, scheme, adm_graph_node, table_inheritance=(None if self._table_inheritance==False else self._supergeoconcept.get_table().get_scheme()+'.'+self._supergeoconcept.get_table().get_name() ))
         if conflict=='replace':
             dbstorage_object.execute('DROP TABLE IF EXISTS %s CASCADE' % ( transform_name_to_postgresql_format(scheme)+'.'+ transform_name_to_postgresql_format(name) )) 
             dbstorage_object.execute(self._table.create_script())
@@ -573,7 +604,9 @@ class DataSource():
             else:
                 download_file(self.get_attributes()['url'],  file_name,  requests_session)
                 self._data_file=file_name
-                
+        else:
+                download_file(self.get_attributes()['url'],  file_name,  requests_session)
+    
     def get_data_file(self):
         return self._data_file
         
@@ -696,7 +729,7 @@ class DataSource():
         else:
             print('Please, set single datafile from the list at first!')
             
-    def write_to_db(self):
+    def convert_to_sql_insert(self):
         '''function to write self representation to the relational database'''
 
 class DBStorage():
@@ -762,17 +795,28 @@ class DBStorage():
     
 class MetaData():
     '''trida pro tvorbu metadat na zaklade propojeni informaci z datoveho zdroje a prislusneho konceptu. '''
-    def __init__(self, name, data, kind):
+    def __init__(self, name, data, kind, table=None):
         self._name=name
         self._data=data
         self._kind=kind
+        self._table=table
     def get_name(self):
         return self._name
     def get_data(self):
         return self._data
     def get_kind(self):
         return self._kind
-    
+    def get_table(self):
+        return self._table
+    def set_table(self, table):
+        self._table=table
+    def set_validitydates(self, dates):
+        self._valid_from, self._valid_to=dates
+    def get_validitydates(self):
+        return(self._valid_from, self._valid_to)
+    def convert_to_sql_insert(self):
+         return "insert into "+self._table.get_scheme()+"."+self._table.get_name()+" (metadata,origin_name,valid_from,valid_to,origin_type) VALUES ('obsah metadat','"+self._name+"','"+self._valid_from+"','"+self._valid_to+"','"+self._kind+"')"
+     
 def ds_from_metadata(metadata_object, format=None):
     #metadata:name,data,kind
     if format==None:
@@ -861,7 +905,7 @@ class View(Table):
         return features
     def read_features_by_condition(self, condition, number=1000):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s where %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
+        features=self._dbs.execute_many('select * from %s where %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name),  condition) ,  number=number)
         return features
     def create_index(self, column,  type,  unique=False):
         if self._type=='materialized':
@@ -1041,6 +1085,8 @@ class Theme():
                 transform selected features according to the provided transformation_dictionary
                 add transformed feature to the return list
             yield(subgeoconcept, list)'''
+    def convert_to_sql_insert(self):
+        '''function to write self representation to the relational database'''
 
 class InspireTheme(Theme):
     ''''popis pasportu objektu Inspire'''    
@@ -1158,11 +1204,11 @@ class Grid:
       xOffset = math.floor(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0])
       yOffset = math.floor(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1])
   elif self._grid_cellorigin=='cc':
-      xOffset = round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]).astype(int)
-      yOffset = round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]).astype(int)
+      xOffset = np.int(round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]))
+      yOffset = np.int(round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]))
   else:
-      xOffset = round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]).astype(int)
-      yOffset = round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]).astype(int)
+      xOffset = np.int(round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]))
+      yOffset = np.int(round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]))
   return(xOffset,yOffset)
   
  '''def split_grid(self, size, origin=self._grid_origin, folder_scheme=None):
@@ -1177,13 +1223,13 @@ np.multiply(g.find_index((0,0)),g.get_gridstepsize())
 class Imagee():
     '''Class to read and work with raster data - DEM, Sentinel Imagery
     '''
-    def __init__ (self, dataarray=None, metadata=None):
+    def __init__ (self, dataarray=None, metadata=None, grid=None):
         '''
         Initialize the Imagee object.
         It is needed to provide numpy array (values in 2D space) as well as metadata,
         where 'affine_transformation' and 'nodata' keys are important.
         '''
-        if metadata!=None and dataarray!=None:
+        if metadata!=None and list(dataarray)!=None:
             self._metadata = metadata
             if type(dataarray)==ma.core.MaskedArray:
                 dataarray = dataarray.filled(self._metadata['nodata'])
@@ -1195,6 +1241,7 @@ class Imagee():
         else:
             self._metadata=metadata
             self._data=dataarray
+        self._grid=grid
 
     def get_metadata(self):
         return self._metadata
@@ -1207,6 +1254,12 @@ class Imagee():
     
     def set_data(self, data):
         self._data=data
+        
+    def get_grid(self):
+        return self._grid
+        
+    def set_grid(self, grid):
+        self._grid=grid
 
     def image_to_geo_coordinates(self, rownum, colnum):
         return( (self._metadata['affine_transformation'][0]+colnum*self._metadata['affine_transformation'][1]+0.5*self._metadata['affine_transformation'][1], self._metadata['affine_transformation'][3]+rownum*self._metadata['affine_transformation'][5]+0.5*self._metadata['affine_transformation'][5]) )
@@ -1375,7 +1428,8 @@ class Imagee():
         #srs.ImportFromWkt('GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.01745329251994328,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]]')
         output_raster.SetProjection(srs.ExportToWkt())
         output_raster.GetRasterBand(1).WriteArray(self._data)
-        output_raster.GetRasterBand(1).SetNoDataValue(self._metadata['nodata'])
+        if self._metadata['nodata']!=None:
+            output_raster.GetRasterBand(1).SetNoDataValue(self._metadata['nodata'])
         output_raster.FlushCache()
         del output_raster
 
