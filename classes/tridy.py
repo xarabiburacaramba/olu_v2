@@ -1,4 +1,3 @@
-
 import psycopg2
 import psycopg2.extras
 import requests
@@ -17,6 +16,7 @@ from shutil import copyfile
 import datetime
 from io import BytesIO
 import binascii
+import re
 
 def transform_wkt_geometry(geom_wkt, osr_coordinatetransformation):
     geom=ogr.CreateGeometryFromWkt(geom_wkt)
@@ -29,6 +29,9 @@ def transform_name_to_postgresql_format(name):
         return '"{}"'.format(name)
     else:
         return name
+        
+def transform_column_name_to_postgresql_format(name):
+    return re.sub('[^a-zA-Z0-9_]', '_', name)
 
 def precision_and_scale(x):
  max_digits = 14
@@ -282,7 +285,7 @@ class GeoConcept():
         
     def get_raster_output_backend(self):
         return self._raster_backend
-        
+
     def read_raster_output_backend(self, band_number=1, bbox=None):
         driver=gdal.GetDriverByName(self._data_source.get_attributes()['format'])
         dataset = gdal.Open(self._raster_backend)
@@ -418,7 +421,7 @@ class GeoConcept():
         return self._feature_representation
         
     def read_features_from_table(self, number):
-        features=self._table.read_features(number)
+        features=self._table.read_features(number, ','.join([i['name'] for i in self._attributes]).replace('geom','st_asbinary(geom) as geom'))
         if self._feature_type=='Feature':
             while True:
                 yield [Feature(**{j:i[j] for j in dict(i) if j!='id'},geom_type='wkb') for i in next(features)]
@@ -433,7 +436,7 @@ class GeoConcept():
                 yield [AdmUnitFeature(**i,geom_type='wkb') for i in next(features)]
                 
     def read_features_from_table_by_sqlcondition(self, sqlcondition, number):
-        features=self._table.read_features_by_condition(sqlcondition,  number)
+        features=self._table.read_features_by_condition(sqlcondition,  number,  ','.join([i['name'] for i in self._attributes]).replace('geom','st_asbinary(geom) as geom'))
         if self._feature_type=='Feature':
             while True:
                 yield [Feature(**i,geom_type='wkb') for i in next(features)]
@@ -856,22 +859,22 @@ class Table():
         '''read first single feature '''
         feature=self._dbs.execute('select * from %s limit 1' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name) ))
         return feature
-    def read_features(self, number=1000):
+    def read_features(self, number=1000,  attributes='*'):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
+        features=self._dbs.execute_many('select %s from %s' % (attributes,  transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
         return features
-    def read_features_by_condition(self, condition, number=1000):
+    def read_features_by_condition(self, condition, number=1000,  attributes='*'):
         '''features generator '''
-        features=self._dbs.execute_many('select * from %s where %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name), condition) ,  number=number)
+        features=self._dbs.execute_many('select %s from %s where %s' % (attributes,  transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name), condition) ,  number=number)
         return features
     def create_index(self, column,  type,  unique=False):
         if type=='btree':
             if unique==True:
-                self._dbs.execute('create unique index uidx_%s_%s ON %s (%s);' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
+                self._dbs.execute('create unique index uidx_%s_%s ON %s (%s);' % ( self._name,   transform_column_name_to_postgresql_format(column),  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
             else:
-                self._dbs.execute('create index idx_%s_%s on %s using btree(%s)' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
+                self._dbs.execute('create index idx_%s_%s on %s using btree(%s)' % ( self._name,  transform_column_name_to_postgresql_format(column),  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
         elif type=='gist':
-            self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  column,  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
+            self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  transform_column_name_to_postgresql_format(column),  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
         else:
             print('this type of index is not implemented')
             
@@ -899,10 +902,10 @@ class View(Table):
         '''read first single feature '''
         feature=self._dbs.execute('select * from %s limit 1' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) )
         return feature
-    def read_features(self, number=1000):
-        '''features generator '''
-        features=self._dbs.execute_many('select * from %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
-        return features
+    #def read_features(self, number=1000):
+    #   '''features generator '''
+    #  features=self._dbs.execute_many('select * from %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)) ,  number=number)
+    # return features
     def read_features_by_condition(self, condition, number=1000):
         '''features generator '''
         features=self._dbs.execute_many('select * from %s where %s' % ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name),  condition) ,  number=number)
@@ -943,7 +946,7 @@ class Feature():
             self._geom=geom.ExportToWkt()
             self._geom_type='wkt'
         elif self._geom_type=='wkb':
-            geom=ogr.CreateGeometryFromWkb(binascii.unhexlify(self._geom))
+            geom=ogr.CreateGeometryFromWkb(self._geom)
             geom.Transform(osr_coordinatetransformation)
             self._geom=geom.ExportToWkt()
             self._geom_type='wkt'
@@ -965,7 +968,7 @@ class Feature():
         elif self._geom_type=='geojson':
             geom_json=self._geom
         elif self._geom_type=='wkb':
-            geom=ogr.CreateGeometryFromWkb(binascii.unhexlify(self._geom))
+            geom=ogr.CreateGeometryFromWkb(self._geom)
             geom_json=json.loads(geom.ExportToJson())
         else:
             raise ValueError('the feature has unsupported geometry type')
@@ -998,7 +1001,7 @@ class AdmUnitFeature(Feature):
         elif self._geom_type=='geojson':
             geom_json=self._geom
         elif self._geom_type=='wkb':
-            geom=ogr.CreateGeometryFromWkb(binascii.unhexlify(self._geom))
+            geom=ogr.CreateGeometryFromWkb(self._geom)
             geom_json=json.loads(geom.ExportToJson())
         else:
             raise ValueError('the feature has unsupported geometry type')
