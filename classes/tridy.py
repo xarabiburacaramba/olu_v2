@@ -297,13 +297,19 @@ class GeoConcept():
         if bbox is None:
             im=Imagee((dataset.GetRasterBand(band_number).ReadAsArray()),metadata_dict, grid)
         else:
-            ul_offset=grid.find_index([bbox[0],bbox[1]])
-            lr_offset=grid.find_index([bbox[2],bbox[3]])
-            im_data=dataset.GetRasterBand(band_number).ReadAsArray(xoff=ul_offset[0],yoff=ul_offset[1],win_xsize=(lr_offset[0]-ul_offset[0]) if (lr_offset[0]-ul_offset[0])>0 else 1 ,win_ysize=(ul_offset[1]-lr_offset[1]) if (ul_offset[1]-lr_offset[1])>0 else 1 )
-            im_metadata={**metadata_dict, **{'affine_transformation':(grid.get_gridorigin()[0]+ul_offset[0]*grid.get_gridstepsize()[0], grid.get_gridstepsize()[0], 0.0, grid.get_gridorigin()[1]+ul_offset[1]*grid.get_gridstepsize()[1], 0.0, grid.get_gridstepsize()[1])}}
-            im_grid=Grid((im_metadata['affine_transformation'][0],im_metadata['affine_transformation'][3]),(im_metadata['affine_transformation'][1],im_metadata['affine_transformation'][5]),grid_cell_origin='ul')
-            im=Imagee(im_data, im_metadata, im_grid)
-            del(im_data, im_metadata, im_grid, ul_offset, lr_offset)
+            #ul_offset=grid.find_index([bbox[0],bbox[1]])
+            #lr_offset=grid.find_index([bbox[2],bbox[3]])
+            #im_data=dataset.GetRasterBand(band_number).ReadAsArray(xoff=ul_offset[0],yoff=ul_offset[1],win_xsize=(lr_offset[0]-ul_offset[0]) if (lr_offset[0]-ul_offset[0])>0 else 1 ,win_ysize=(ul_offset[1]-lr_offset[1]) if (ul_offset[1]-lr_offset[1])>0 else 1 )
+            #im_metadata={**metadata_dict, **{'affine_transformation':(grid.get_gridorigin()[0]+ul_offset[0]*grid.get_gridstepsize()[0], grid.get_gridstepsize()[0], 0.0, grid.get_gridorigin()[1]+ul_offset[1]*grid.get_gridstepsize()[1], 0.0, grid.get_gridstepsize()[1])}}
+            #im_grid=Grid((im_metadata['affine_transformation'][0],im_metadata['affine_transformation'][3]),(im_metadata['affine_transformation'][1],im_metadata['affine_transformation'][5]),grid_cell_origin='ul')
+            #im=Imagee(im_data, im_metadata, im_grid)
+            #del(im_data, im_metadata, im_grid, ul_offset, lr_offset)
+            origin=tuple(grid.find_index([bbox[0],bbox[1]]))
+            size=tuple(np.array(grid.find_index((bbox[2],bbox[3])))-np.array(grid.find_index((bbox[0],bbox[1]))))+np.array([1,1])
+            a=np.array(dataset.GetRasterBand(band_number).ReadAsArray(xoff=int(origin[0]),yoff=int(origin[1]),win_xsize=int(size[0]),win_ysize=int(size[1])))
+            im_grid=Grid(np.array(grid.get_gridorigin())+np.array(tuple(grid.find_index((bbox[0],bbox[1]))))*np.array(grid.get_gridstepsize()),(metadata_dict['affine_transformation'][1],metadata_dict['affine_transformation'][5]))
+            im_metadata_dict={**metadata_dict,  **{'affine_transformation':im_grid.get_affinetransformation()}}
+            im=Imagee(a,im_metadata_dict)
         del(driver, dataset, grid)
         return im
     
