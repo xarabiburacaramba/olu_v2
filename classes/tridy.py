@@ -15,8 +15,9 @@ from lxml import etree
 from shutil import copyfile
 import datetime
 from io import BytesIO
-import binascii
+#import binascii
 import re
+from scipy.stats import mode
 
 def transform_wkt_geometry(geom_wkt, osr_coordinatetransformation):
     geom=ogr.CreateGeometryFromWkt(geom_wkt)
@@ -1405,6 +1406,12 @@ class Imagee():
         Get self median value excluding self nodata values.
         '''
         return np.nanmedian(self._data[np.where(self._data!=self._metadata['nodata'])])
+        
+    def get_mode_value(self):
+        '''
+        Get self mode value excluding self nodata value.
+        '''
+        return mode(self._data[np.where(self._data!=self._metadata['nodata'])])[0][0]
 
     def calculate_slope(self):
         '''
