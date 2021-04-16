@@ -18,6 +18,7 @@ from io import BytesIO
 #import binascii
 import re
 from scipy.stats import mode
+from scipy.ndimage import morphological_laplace
 
 def transform_wkt_geometry(geom_wkt, osr_coordinatetransformation):
     geom=ogr.CreateGeometryFromWkt(geom_wkt)
@@ -1379,8 +1380,15 @@ class Imagee():
         d['affine_transformation'],d['ul_x'],d['ul_y'], d['nodata'],d['proj_wkt']=gt2,ulX,ulY, self._metadata['nodata'], self._metadata['proj_wkt']
         return (clip, d)
         
-    def get_statistics(self):
-        dictionary={'mean':self.get_mean_value(),'max':self.get_max_value(),'min':self.get_min_value()}
+    def get_statistics(self, categoric=False, full=False):
+        if full is False and categoric is False:
+            dictionary={'mean':self.get_mean_value(),'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(),  'std':self.get_std_value() }
+        elif categoric is False and full is True:
+            dictionary={'mean':self.get_mean_value(),'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(),  'std':self.get_std_value(), 'histogram': self.get_histogram_binscounts() }
+        elif categoric is True and full is False:
+            dictionary={'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value() }
+        else:
+            dictionary={'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(), 'frequencies': self.get_values_frequencies() }
         return dictionary
 
     def get_min_value(self):
@@ -1401,6 +1409,12 @@ class Imagee():
         '''
         return np.nanmean(self._data[np.where(self._data!=self._metadata['nodata'])])
 
+    def get_std_value(self):
+        '''
+        Get self standard deviation excluding self nodata values.
+        '''
+        return np.nanstd(self._data[np.where(self._data!=self._metadata['nodata'])])
+        
     def get_median_value(self):
         '''
         Get self median value excluding self nodata values.
@@ -1412,22 +1426,47 @@ class Imagee():
         Get self mode value excluding self nodata value.
         '''
         return mode(self._data[np.where(self._data!=self._metadata['nodata'])])[0][0]
+    
+    def get_histogram_binscounts(self):
+        '''
+        Get self histogram.
+        '''
+        return {str(k):int(v) for k,v in dict(zip(*np.histogram(self._data[np.where(self._data!=self._metadata['nodata'])])[::-1])).items() if v>0}
+        
+    def get_values_frequencies(self):
+        '''
+        Get self values frequencies.
+        '''
+        values,counts=np.unique(self._data, return_counts=True)
+        return {str(k):v for k,v in dict(zip(values.data,counts)).items() if k!=self._metadata['nodata']}
 
     def calculate_slope(self):
         '''
         Calculate slope from self data of DEM image.
         '''
-        x, y = np.gradient(self._data)
-        slope = np.pi/2. - np.arctan(np.sqrt(x*x + y*y))
+        x, y = np.gradient(self._data, abs(self._metadata['affine_transformation'][1]), abs(self._metadata['affine_transformation'][5]),  edge_order=1,axis=None) if 'affine_transformation' in self._metadata else np.gradient(self._data)
+        #slope = np.pi/2. - np.arctan(np.sqrt(x*x + y*y))
+        slope = np.degrees(np.arctan(np.sqrt(x*x + y*y)))
         return (slope,self._metadata)
 
-    def calculate_azimuth(self):
+    def calculate_azimuth(self, exact=True):
         '''
         Calculate azimuth from self data of DEM image.
         '''
-        x, y = np.gradient(self._data)
-        aspect = (np.arctan2(-x, y))*180/np.pi
+        x, y = np.gradient(self._data, abs(self._metadata['affine_transformation'][1]), abs(self._metadata['affine_transformation'][5]),  edge_order=1,axis=None) if 'affine_transformation' in self._metadata else np.gradient(self._data)
+        aspect = np.degrees(np.arctan2(-x, y))
+        if exact is False:
+            bins=[-180,-135,-45,45,135,180]
+            aspect=np.digitize(aspect,bins)
+            aspect[aspect==5]=1
+            #1-east,2-north,3-west,4-south
         return (aspect,self._metadata)
+        
+    def calculate_laplace(self):
+        '''
+        Calculate morphological laplace from self data of DEM image.
+        '''
+        return (morphological_laplace(self._data),self._metadata)
 
     def export_as_tif(self,filename):
         '''
