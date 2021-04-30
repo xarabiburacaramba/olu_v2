@@ -4,7 +4,6 @@ import requests
 import zipfile
 import os
 import json
-#import ogr
 from osgeo import gdal,  gdalnumeric,  ogr,  osr
 import math
 import numpy as np
@@ -15,10 +14,14 @@ from lxml import etree
 from shutil import copyfile
 import datetime
 from io import BytesIO
-#import binascii
 import re
 from scipy.stats import mode
 from scipy.ndimage import morphological_laplace
+
+def create_folder_if_not_exists(target):
+    """Create target folder"""
+    if not os.path.exists(target):
+        os.makedirs(target)
 
 def transform_wkt_geometry(geom_wkt, osr_coordinatetransformation):
     geom=ogr.CreateGeometryFromWkt(geom_wkt)
@@ -314,7 +317,16 @@ class GeoConcept():
             im=Imagee(a,im_metadata_dict)
         del(driver, dataset, grid)
         return im
-    
+        
+    def get_imagee(self):
+        try:
+            return self._imagee
+        except:
+            return None 
+            
+    def set_imagee(self, im):
+        self._imagee=im
+      
     def set_geojson_output_backend(self,  folder,  name,  type='GeoJSON'):
         self._geojson_backend=folder+name
         
@@ -569,12 +581,14 @@ class AdmUnit(GeoConcept):
 
 class DataSource():
     ''' trida na definici datoveho zdroje pro OLU. '''
-    def __init__(self,  type,  name,  attributes,  metadata=None, data_file=None) :
+    def __init__(self,  type,  name,  attributes,  metadata=None, data_file=None,  olu_id=None,  metatable=None) :
         self._type=type
         self._name=name
         self._metadata=metadata
         self._attributes=attributes
         self._data_file=data_file
+        self._olu_id=olu_id
+        self._metatable=metatable
         
     def get_type(self):
         return self._type
@@ -740,8 +754,21 @@ class DataSource():
         else:
             print('Please, set single datafile from the list at first!')
             
+    def get_olu_id(self):
+        return self._olu_id
+    
+    def set_olu_id(self, olu_id):
+        self._olu_id=olu_id
+        
+    def get_metatable(self):
+        return self._metatable
+        
+    def set_metatable(self, metatable):
+        self._metatable=metatable
+    
     def convert_to_sql_insert(self):
-        '''function to write self representation to the relational database'''
+        sql_insert= "insert into "+self._metatable.get_scheme()+"."+self._metatable.get_name()+" (fid,  metadata_fid, uri, dataset_type) VALUES ("+str(self._olu_id)+","+str(self.get_metadata().get_olu_id())+","+("'{}'".format(self._name))+","+str(self._type)+")"
+        return sql_insert
 
 class DBStorage():
     '''trida ktera definuje databazi, pripojeni, pripadne nejake specificke dotazy, napriklad, nacist vsechny uzemne administrativni celky z databaze. '''
@@ -801,32 +828,55 @@ class DBStorage():
             else:
                 break
         cursor.close()
-        return 'inserted!'        
+        return 'inserted!' 
+    
+    def get_last_value_of_seq(self, sequence_name,set_last_value=False,data_table=None,id_attribute=None):
+        if set_last_value is True:
+            max_value=self.execute('select max(%s) from %s' % (id_attribute, data_table) )[0][0]
+            max_value=max_value if max_value is not None else 1
+            self.execute("select setval('%s', %s)" % (sequence_name,max_value) )
+        return self.execute('select last_value from %s' % sequence_name )[0][0]
 
     
 class MetaData():
     '''trida pro tvorbu metadat na zaklade propojeni informaci z datoveho zdroje a prislusneho konceptu. '''
-    def __init__(self, name, data, kind, table=None):
+    def __init__(self, name, data, kind, metatable=None,  example_feature=None,  olu_id=None):
         self._name=name
         self._data=data
         self._kind=kind
-        self._table=table
+        self._metatable=metatable
+        self._example_feature=example_feature
+        self._olu_id=olu_id
     def get_name(self):
         return self._name
     def get_data(self):
         return self._data
     def get_kind(self):
         return self._kind
-    def get_table(self):
-        return self._table
-    def set_table(self, table):
-        self._table=table
+    def set_kind(self, kind):
+        self._kind=kind
+    def get_metatable(self):
+        return self._metatable
+    def set_metatable(self, metatable):
+        self._metatable=metatable
+    def get_example_feature(self):
+        return self._example_feature
+    def set_example_feature(self, example_feature):
+        self._example_feature=example_feature
+    def get_olu_id(self):
+        return self._olu_id
+    def set_olu_id(self, olu_id):
+        self._olu_id=olu_id
     def set_validitydates(self, dates):
         self._valid_from, self._valid_to=dates
     def get_validitydates(self):
         return(self._valid_from, self._valid_to)
     def convert_to_sql_insert(self):
-         return "insert into "+self._table.get_scheme()+"."+self._table.get_name()+" (metadata,origin_name,valid_from,valid_to,origin_type) VALUES ('obsah metadat','"+self._name+"','"+self._valid_from+"','"+self._valid_to+"','"+self._kind+"')"
+        if self._example_feature is not None:
+            sql_insert= "insert into "+self._metatable.get_scheme()+"."+self._metatable.get_name()+" (fid,metadata,origin_name,valid_from,valid_to,origin_type,column_names) VALUES ("+str(self._olu_id)+",'obsah metadat',"+("'{}'".format(self._name))+","+("'{}'".format(self._valid_from) if self._valid_from is not None else 'NULL')+","+("'{}'".format(self._valid_to)  if self._valid_to is not None else 'NULL')+","+("'{}'".format(self._kind))+",'"+(json.dumps({"column_names": list(self._example_feature.get_data().keys() )})) +"'::json)"
+        else:
+            sql_insert= "insert into "+self._metatable.get_scheme()+"."+self._metatable.get_name()+" (fid,metadata,origin_name,valid_from,valid_to,origin_type) VALUES ("+str(self._olu_id)+",'obsah metadat',"+("'{}'".format(self._name))+","+("'{}'".format(self._valid_from) if self._valid_from is not None else 'NULL')+","+("'{}'".format(self._valid_to)  if self._valid_to is not None else 'NULL')+","+("'{}'".format(self._kind))+")"
+        return sql_insert
      
 def ds_from_metadata(metadata_object, format=None):
     #metadata:name,data,kind
@@ -885,6 +935,8 @@ class Table():
             self._dbs.execute('create index sidx_%s_%s on %s using gist(%s)' % ( self._name,  transform_column_name_to_postgresql_format(column),  ( transform_name_to_postgresql_format(self._scheme)+'.'+ transform_name_to_postgresql_format(self._name)), column ) )
         else:
             print('this type of index is not implemented')
+    def get_self_sequence_name(self, column_name):
+        return (self._dbs.execute("select (regexp_matches(column_default, '^.*(\''.*\'').*$', 'g'))[1] from INFORMATION_SCHEMA.COLUMNS where table_name = '%s' and column_name='%s'" % (self._name, column_name))[0][0]).replace("'", '')
             
 class View(Table):
     '''trida na cteni dat z pohledu. '''
@@ -1380,15 +1432,15 @@ class Imagee():
         d['affine_transformation'],d['ul_x'],d['ul_y'], d['nodata'],d['proj_wkt']=gt2,ulX,ulY, self._metadata['nodata'], self._metadata['proj_wkt']
         return (clip, d)
         
-    def get_statistics(self, categoric=False, full=False):
+    def get_statistics(self, categoric=False, full=False, percentage=False):
         if full is False and categoric is False:
             dictionary={'mean':self.get_mean_value(),'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(),  'std':self.get_std_value() }
         elif categoric is False and full is True:
-            dictionary={'mean':self.get_mean_value(),'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(),  'std':self.get_std_value(), 'histogram': self.get_histogram_binscounts() }
+            dictionary={'mean':self.get_mean_value(),'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(),  'std':self.get_std_value(), 'histogram': self.get_histogram_binscounts(percentage=percentage) }
         elif categoric is True and full is False:
             dictionary={'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value() }
         else:
-            dictionary={'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(), 'frequencies': self.get_values_frequencies() }
+            dictionary={'max':self.get_max_value(),'min':self.get_min_value(), 'mode':self.get_mode_value(), 'frequencies': self.get_values_frequencies(percentage=percentage) }
         return dictionary
 
     def get_min_value(self):
@@ -1425,20 +1477,30 @@ class Imagee():
         '''
         Get self mode value excluding self nodata value.
         '''
-        return mode(self._data[np.where(self._data!=self._metadata['nodata'])])[0][0]
+        return mode(self._data[self._data.mask==False])[0][0]#mode(self._data[np.where(self._data!=self._metadata['nodata'])])[0][0]
     
-    def get_histogram_binscounts(self):
+    def get_histogram_binscounts(self, percentage=False):
         '''
         Get self histogram.
         '''
-        return {str(k):int(v) for k,v in dict(zip(*np.histogram(self._data[np.where(self._data!=self._metadata['nodata'])])[::-1])).items() if v>0}
+        if percentage is False:
+            binscounts= {str(k):str(v) for k,v in dict(zip(*np.histogram(self._data[np.where(self._data!=self._metadata['nodata'])], range=(self.get_min_value(),  self.get_max_value()) )[::-1])).items() if v>0}
+        else:
+            data_size=self._data[self._data.mask==False].size
+            binscounts= {str(k):'{:.2f}'.format((v/data_size)*100) for k,v in dict(zip(*np.histogram(self._data[np.where(self._data!=self._metadata['nodata'])], range=(self.get_min_value(),  self.get_max_value()))[::-1])).items() if v>0}
+        return binscounts
         
-    def get_values_frequencies(self):
+    def get_values_frequencies(self, percentage=False):
         '''
         Get self values frequencies.
         '''
         values,counts=np.unique(self._data, return_counts=True)
-        return {str(k):v for k,v in dict(zip(values.data,counts)).items() if k!=self._metadata['nodata']}
+        if percentage is False:
+            values_frequencies={str(k):str(v) for k,v in dict(zip(values.data,counts)).items() if k!=self._metadata['nodata']}
+        else:
+            data_size=self._data[self._data.mask==False].size
+            values_frequencies={str(k):'{:.2f}'.format((v/data_size)*100) for k,v in dict(zip(values.data,counts)).items() if k!=self._metadata['nodata']}
+        return values_frequencies
 
     def calculate_slope(self):
         '''
@@ -1462,11 +1524,11 @@ class Imagee():
             #1-east,2-north,3-west,4-south
         return (aspect,self._metadata)
         
-    def calculate_laplace(self):
+    def calculate_laplace(self, size):
         '''
         Calculate morphological laplace from self data of DEM image.
         '''
-        return (morphological_laplace(self._data),self._metadata)
+        return (morphological_laplace(self._data, size=size),self._metadata)
 
     def export_as_tif(self,filename):
         '''
@@ -1508,6 +1570,83 @@ class Imagee():
         # Cleanup 
         gdal.Unlink('/vsimem/image.tif') 
         return data
+        
+
+class SuperImagee:
+    """Multi-array image. Typically netCDF data format."""
+    def __init__ (self, data=None, metadata=None, grid=None):
+        """Initialize the image object.
+        Typically should have attributes such as data and metadata.
+        Data is a netCDF4 dataset object and metadata is a dictionary object."""
+        self._data = data
+        self._metadata = metadata
+    
+    def get_dimensions(self):
+        return list(self._data.dimensions.keys())[::-1]
+    
+    def get_variables(self):
+        return list(self._data.variables)
+    
+    def get_data(self):
+        return self._data
+    
+    def set_data(self, data):
+        self._data=data
+    
+    def find_index(self, dictionary):
+        """Find slice indices given the dictionary with slice dimension name and its' range.
+        For instance, dictionary {'latitude':[40,50]} would return index to make appropriate slice of dataframe"""
+        variable=list(dictionary.keys())[0]
+        if len(dictionary[variable])==2:
+            return np.where(np.logical_and(self._data.variables[variable][:]>=np.sort(dictionary[variable])[0], self._data.variables[variable][:]<=np.sort(dictionary[variable])[1]))[0]
+        elif len(dictionary[variable])==1:
+            return np.array(np.where(self._data.variables[variable][:]==dictionary[variable][0])).flatten()
+        else:
+            raise ValueError('The dictionary should contain variable name with its value or range. ')
+    
+    def slice (self, attribute, dictionary):
+        """Create subImage in a way of slicing original Image by dictionary of attributes"""
+        dimensions=self._data.variables[attribute].dimensions
+        indices=[]
+        for dim in dimensions:
+            if dim in list(dictionary.keys()):
+                indices.append(self.find_index({dim:dictionary[dim]}))
+            else:
+                indices.append(None)
+        return self._data.variables[attribute][[np.array([x]).flatten() if x is not None else slice(None) for x in np.array(indices).flatten()]].data
+    
+    def get_statistics(self, attribute, dictionary, kind):
+        dimensions=self._data.variables[attribute].dimensions
+        indices=[]
+        for dim in dimensions:
+            if dim in list(dictionary.keys()):
+                indices.append(self.find_index({dim:dictionary[dim]}))
+            else:
+                indices.append(slice(None))
+        if 'longitude' in list(dictionary.keys()):
+            min_longitude=np.min(dictionary['longitude'])
+        else:
+            min_longitude=np.min(self._data.variables['longitude'])
+        if 'latitude' in list(dictionary.keys()):
+            max_latitude=np.max(dictionary['latitude'])
+        else:
+            max_latitude=np.max(self._data.variables['latitude'])
+        if kind=='min':
+            data=self._data.variables[attribute][indices].min(axis=0)
+        elif kind=='max':
+            data=self._data.variables[attribute][indices].max(axis=0)
+        elif kind=='mean':
+            data=self._data.variables[attribute][indices].mean(axis=0)
+        elif kind=='sum':
+            data=self._data.variables[attribute][indices].sum(axis=0)
+        elif kind=='less_then_0_count':
+            def less_then_zero(a):
+                return (a<273.15).astype(int)
+            pre_data=np.apply_along_axis(less_then_zero,0, self._data.variables[attribute][indices])
+            data=pre_data.sum(axis=0)
+        else:
+            print('This kind of statistical measurement is not yet available. ')
+        return Imagee(data,{'affine_transformation':(min_longitude,abs(self._data.variables['longitude'][1]-self._data.variables['longitude'][0]),0,max_latitude,0,-abs(self._data.variables['longitude'][1]-self._data.variables['longitude'][0]))})
     
 '''
 available_database=DBStorage(connection_parameters)
