@@ -230,7 +230,7 @@ def xml_lpis_cz_reader(xml_file,feature_type='feature'):
 
 class GeoConcept():
     ''' zaklad. pouziva se hlavne na tvorbu tabulek pro ulozeni prvku v databazi. muze vychazet z datoveho zdroje, anebo muze se vytvaret umele. '''
-    def __init__(self, name,  abstract,  feature_type,  attributes=[{"name":"id","type":"serial primary key"},{"name":"geom","type":"geometry"},{"name":"data","type":"json"}],  subgeoconcepts=[],  data_source=None, adm_graph_node=None) :
+    def __init__(self, name,  abstract,  feature_type,  attributes=[{"name":"id","type":"serial primary key"},{"name":"geom","type":"geometry"},{"name":"data","type":"json"}],  subgeoconcepts=[],  data_source=None, adm_graph_node=None, wkt_geom=None) :
         self._name=name
         self._abstract=abstract
         self._feature_type=feature_type
@@ -238,6 +238,7 @@ class GeoConcept():
         self._subgeoconcepts=subgeoconcepts
         self._data_source=data_source
         self._adm_graph_node=adm_graph_node
+        self._wkt_geom=wkt_geom
         self._table=None
         
     def get_name(self):
@@ -278,6 +279,12 @@ class GeoConcept():
        
     def set_adm_graph_node(self, adm_graph_node):
        self._adm_graph_node=adm_graph_node
+       
+    def get_wkt_geom(self):
+       return self._wkt_geom
+       
+    def set_wkt_geom(self, wkt_geom):
+       self._wkt_geom=wkt_geom
         
     def remove_attribute(self, key):
         self._attributes.remove(next(item for item in self._attributes if item['name'] == key))
@@ -314,7 +321,7 @@ class GeoConcept():
             a=np.array(dataset.GetRasterBand(band_number).ReadAsArray(xoff=int(origin[0]),yoff=int(origin[1]),win_xsize=int(size[0]),win_ysize=int(size[1])))
             im_grid=Grid(np.array(grid.get_gridorigin())+np.array(tuple(grid.find_index((bbox[0],bbox[1]))))*np.array(grid.get_gridstepsize()),(metadata_dict['affine_transformation'][1],metadata_dict['affine_transformation'][5]))
             im_metadata_dict={**metadata_dict,  **{'affine_transformation':im_grid.get_affinetransformation()}}
-            im=Imagee(a,im_metadata_dict)
+            im=Imagee(a,im_metadata_dict, im_grid)
         del(driver, dataset, grid)
         return im
         
@@ -534,8 +541,8 @@ class GeoConcept():
 
 class SubGeoConcept(GeoConcept):
     "vektorovy prvek, reprezentuje administrativne uzemni celek"
-    def __init__(self, name,  abstract,  feature_type,  attributes, data_source,  supergeoconcept, adm_graph_node=None, table_inheritance=False,  type='semantic',  subgeoconcepts=[] ):
-        super().__init__(name,  abstract,  feature_type,  attributes, subgeoconcepts,  data_source, adm_graph_node)
+    def __init__(self, name,  abstract,  feature_type,  attributes, data_source,  supergeoconcept, adm_graph_node=None, wkt_geom=None, table_inheritance=False,  type='semantic',  subgeoconcepts=[] ):
+        super().__init__(name,  abstract,  feature_type,  attributes, subgeoconcepts,  data_source, adm_graph_node, wkt_geom)
         self._supergeoconcept=supergeoconcept
         self._table_inheritance=table_inheritance
         self._type=type
@@ -1319,7 +1326,14 @@ class Imagee():
         self._data=data
         
     def get_grid(self):
-        return self._grid
+        if self._grid is not None:
+            grid=self._grid
+        else:
+            try:
+                grid=Grid((self._metadata['affine_transformation'][0],self._metadata['affine_transformation'][3]),(self._metadata['affine_transformation'][1],self._metadata['affine_transformation'][5]),grid_cell_origin='ul')
+            except:
+                grid=None
+        return grid
         
     def set_grid(self, grid):
         self._grid=grid

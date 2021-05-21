@@ -1279,3 +1279,121 @@ for c in range(lyr.GetFeatureCount()):
 
 olu_conn.commit()
 
+olu=GeoConcept(x, y, z)
+#vybraty vsi spodnii administratyvnyi 
+adm_units=dbs_olu.execute('select distinct unit_fid from olu2.olu_object_to_admin_unit ')
+def generate_olu_reference_geometries( order):
+    for  adm_unit in 
+    
+    
+    
+    
+    olu_objects_union_cascaded=ogr.CreateGeometryFromWkt('MULTIPOLYGON EMPTY')
+    result_list=[]
+    ku=find_neighbors_level(G.reverse(),kod_obce,4)
+    while True:
+        try:
+            cislo_ku=next(ku)
+            print(cislo_ku)
+            sub=lpis_cz.get_subgeoconcept_by_adm_node(cislo_ku)
+            print(sub.get_name())
+            lpis_feature_gen=sub.read_features_from_table(100)
+            for feature_batch in lpis_feature_gen:
+                if len(feature_batch)>0:
+                    print(len(feature_batch))
+                    for feature in feature_batch:
+                        feature.transform_geometry(sjtsk5514_to_wgs84)
+                        
+                else:
+                    break
+        except:
+            print('no next feature')
+            break
+
+    obec_gen=admunit_cz.read_features_from_table_by_sqlcondition('id=%s' %kod_obce,1)
+    obec=next(obec_gen)[0]
+    obec_area=ogr.CreateGeometryFromWkb(obec.get_geometry()).Area()
+ 
+    try:
+        olu_objects_union=ogr.CreateGeometryFromWkb(dbs_olu.execute("select st_asbinary(st_union(geom)) from %s where admunit_id='%s'"  % ('olu2.olu_object',kod_obce))[0][0])
+        olu_objects_union.Transform(wgs84_to_sjtsk5514)
+        if abs(obec_area-olu_objects_union.Area())<100:
+            return None
+        olu_objects_union_cascaded=olu_objects_union#olu_objects_union.UnionCascaded()
+        del(olu_objects_union)
+        print(olu_objects_union_cascaded.Area())
+        print(ogr.CreateGeometryFromWkb(obec.get_geometry()).Area())
+    except:
+        dbs_olu.disconnect()
+        dbs_olu.connect()
+    
+    ruian_features_gen=ruian_parcely_cz.get_subgeoconcept_by_name(kod_obce).read_features_from_table_by_sqlcondition("st_intersects(geom,st_setsrid(st_geomfromtext('%s'),5514))" % (ogr.CreateGeometryFromWkb(obec.get_geometry()).Difference(olu_objects_union_cascaded).ExportToWkt()) ,1000)
+             
+    for feature_batch in ruian_features_gen:
+        print(len(feature_batch))
+        if len(feature_batch)>0:
+            for feature in feature_batch:
+                feature.transform_geometry(sjtsk5514_to_wgs84)
+                olu_id=next(olu_id_gen)
+                atts_id=next(olu_atts_id_gen)
+                [dbs_olu.execute(i) for i in apply_function(ruian_transformations(feature,olu_id,atts_id,kod_obce,olu_object_table,olu_attribute_set_table,olu_atts_to_object_table),'three_insert_statements')]
+        else:
+            break
+    
+    try:
+        olu_objects_union=ogr.CreateGeometryFromWkb(dbs_olu.execute("select st_asbinary(st_union(geom)) from %s where admunit_id='%s'"  % ('olu2.olu_object',kod_obce))[0][0])
+        olu_objects_union.Transform(wgs84_to_sjtsk5514)
+        if abs(obec_area-olu_objects_union.Area())<100:
+            return None
+        olu_objects_union_cascaded=olu_objects_union#olu_objects_union.UnionCascaded()
+        del(olu_objects_union)
+        print(olu_objects_union_cascaded.Area())
+    except:
+        dbs_olu.disconnect()
+        dbs_olu.connect()
+        
+    if ogr.CreateGeometryFromWkb(obec.get_geometry()).Difference(olu_objects_union_cascaded) is None:
+        return None
+    
+    ua_features_gen=ua_cz.read_features_from_table_by_sqlcondition("st_intersects(geom,st_transform(st_setsrid(st_geomfromtext('%s'),5514),3035)) and data->>'CODE2012' not in ('12210','12220','12230')" % (ogr.CreateGeometryFromWkb(obec.get_geometry()).Difference(olu_objects_union_cascaded).ExportToWkt()) ,100)     
+    
+    for feature_batch in ua_features_gen:
+        print(len(feature_batch))
+        if len(feature_batch)>0:
+            for feature in feature_batch:
+                feature.transform_geometry(etrs3035_to_wgs84)
+                olu_id=next(olu_id_gen)
+                atts_id=next(olu_atts_id_gen)
+                [dbs_olu.execute(i) for i in apply_function(ua_transformations(feature,olu_id,atts_id,kod_obce,olu_object_table,olu_attribute_set_table,olu_atts_to_object_table),'three_insert_statements')]
+        else:
+            break
+
+    try:
+        olu_objects_union=ogr.CreateGeometryFromWkb(dbs_olu.execute("select st_asbinary(st_union(geom)) from %s where admunit_id='%s'"  % ('olu2.olu_object',kod_obce))[0][0])
+        olu_objects_union.Transform(wgs84_to_sjtsk5514)
+        if abs(obec_area-olu_objects_union.Area())<100:
+            return None
+        olu_objects_union_cascaded=olu_objects_union#olu_objects_union.UnionCascaded()
+        del(olu_objects_union)
+        print(olu_objects_union_cascaded.Area())
+    except:
+        dbs_olu.disconnect()
+        dbs_olu.connect()
+    
+    
+    if ogr.CreateGeometryFromWkb(obec.get_geometry()).Difference(olu_objects_union_cascaded) is None:
+        return None
+
+    corine_features_gen=corine_cz.get_subgeoconcept_by_name('2018').read_features_from_table_by_sqlcondition("st_intersects(geom,st_transform(st_setsrid(st_geomfromtext('%s'),5514),4326))" % (ogr.CreateGeometryFromWkb(obec.get_geometry()).Difference(olu_objects_union_cascaded).ExportToWkt()) ,10)     
+    
+    for feature_batch in corine_features_gen:
+        print(len(feature_batch))
+        if len(feature_batch)>0:
+            for feature in feature_batch:
+                feature.transform_geometry(wgs84_to_wgs84)
+                olu_id=next(olu_id_gen)
+                atts_id=next(olu_atts_id_gen)
+                [dbs_olu.execute(i) for i in apply_function(corine_transformations(feature,olu_id,atts_id,kod_obce,olu_object_table,olu_attribute_set_table,olu_atts_to_object_table),'three_insert_statements')]
+        else:
+            break
+
