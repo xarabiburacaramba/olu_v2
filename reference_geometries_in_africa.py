@@ -88,7 +88,7 @@ olu_cur.execute('create table tanzania_lc_atts (id integer, lc_class integer, fr
 
 olu_conn.commit()
 
-olu_cur.execute('create unique index idx__tanzania_lc_atts__id on kenya_lc_atts using btree(id) ')
+olu_cur.execute('create unique index idx__tanzania_lc_atts__id on tanzania_lc_atts using btree(id) ')
 
 olu_conn.commit()
 
