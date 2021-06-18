@@ -7,6 +7,7 @@ import json
 from osgeo import gdal,  gdalnumeric,  ogr,  osr
 import math
 import numpy as np
+import pandas as pd
 from numpy import ma
 from PIL import Image, ImageDraw
 import networkx as nx
@@ -840,7 +841,7 @@ class DBStorage():
     def get_last_value_of_seq(self, sequence_name,set_last_value=False,data_table=None,id_attribute=None):
         if set_last_value is True:
             max_value=self.execute('select max(%s) from %s' % (id_attribute, data_table) )[0][0]
-            max_value=max_value if max_value is not None else 1
+            max_value=max_value if max_value is not None else 0
             self.execute("select setval('%s', %s)" % (sequence_name,max_value) )
         return self.execute('select last_value from %s' % sequence_name )[0][0]
 
@@ -1272,7 +1273,7 @@ class Grid:
   '''
   if self._grid_cellorigin=='ul':
       xOffset = math.floor(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0])
-      yOffset = math.floor(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1])
+      yOffset = math.ceil(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1])
   elif self._grid_cellorigin=='cc':
       xOffset = np.int(round(round(coordinate[0]  - self._grid_origin[0], 2)/self._grid_stepsize[0]))
       yOffset = np.int(round(round(coordinate[1] - self._grid_origin[1], 2)/self._grid_stepsize[1]))
@@ -1303,9 +1304,9 @@ class Imagee():
             self._metadata = metadata
             if type(dataarray)==ma.core.MaskedArray:
                 dataarray = dataarray.filled(self._metadata['nodata'])
-                self._data = ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
+                self._data =ma.array(dataarray,mask=[pd.isnull(dataarray)])  if pd.isnull(self._metadata['nodata']) else ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
             elif 'nodata' in self._metadata:
-                self._data = ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
+                    self._data =ma.array(dataarray,mask=[pd.isnull(dataarray)])  if pd.isnull(self._metadata['nodata']) else ma.array(dataarray,mask=[dataarray==self._metadata['nodata']])
             else:
                 self._data = ma.array(dataarray,mask=[dataarray==-32767])
         else:
@@ -1531,18 +1532,23 @@ class Imagee():
         '''
         x, y = np.gradient(self._data, abs(self._metadata['affine_transformation'][1]), abs(self._metadata['affine_transformation'][5]),  edge_order=1,axis=None) if 'affine_transformation' in self._metadata else np.gradient(self._data)
         aspect = np.degrees(np.arctan2(-x, y))
+        metadata=self._metadata
         if exact is False:
             bins=[-180,-135,-45,45,135,180]
             aspect=np.digitize(aspect,bins)
             aspect[aspect==5]=1
+            aspect[aspect==len(bins)]=0
+            metadata['nodata']=0
+            aspect=ma.MaskedArray(data=aspect, mask=(self._data.mask))
             #1-east,2-north,3-west,4-south
-        return (aspect,self._metadata)
+        return (aspect,metadata)
         
     def calculate_laplace(self, size):
         '''
         Calculate morphological laplace from self data of DEM image.
         '''
-        return (morphological_laplace(self._data, size=size),self._metadata)
+        data=morphological_laplace(self._data, size=size)
+        return (ma.MaskedArray(data=data, mask=(self._data.mask)), self._metadata)
 
     def export_as_tif(self,filename):
         '''
